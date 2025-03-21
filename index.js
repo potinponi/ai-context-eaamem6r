@@ -7,71 +7,49 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 
-// AI Context API Supabase connection
+// Supabase connections
 const aiSupabase = createClient(process.env.AI_SUPABASE_URL, process.env.AI_SUPABASE_ANON_KEY);
-
-// Chatbot Supabase connection (for future use)
 const chatbotSupabase = createClient(process.env.CHATBOT_SUPABASE_URL, process.env.CHATBOT_SUPABASE_ANON_KEY);
 
-// Supabase Edge Function URL for embeddings
-const EMBEDDING_FUNCTION_URL = "https://mdnijgzbkracortlwbgi.supabase.co/functions/v1/my-function"; // Update this URL
+// Supabase Edge Function for generating embeddings
+const EMBEDDING_FUNCTION_URL = "https://mdnijgzbkracortlwbgi.supabase.co/functions/v1/my-function"; // Update this
 
-// Function to generate embeddings using Supabase Edge Function
-async function generateEmbedding(text) {
+// Route to retrieve similar embeddings
+app.post("/retrieve-embedding", async (req, res) => {
     try {
-        const response = await axios.post(
-            EMBEDDING_FUNCTION_URL,
-            { input: text },
-            { headers: { "Content-Type": "application/json" } }
-        );
-
-        if (response.data && response.data.embedding) {
-            return response.data.embedding;
-        } else {
-            console.error("Embedding generation failed:", response.data);
-            return null;
-        }
-    } catch (error) {
-        console.error("Error generating embedding:", error.response?.data || error.message);
-        return null;
-    }
-}
-
-// API endpoint to store text with embeddings
-app.post("/store-embedding", async (req, res) => {
-    try {
-        const { content, metadata } = req.body;
-
-        if (!content) {
-            return res.status(400).json({ error: "Content is required" });
+        const { query } = req.body;
+        if (!query) {
+            return res.status(400).json({ error: "Missing query text" });
         }
 
-        const embedding = await generateEmbedding(content);
+        // Get embedding for the query
+        const embeddingResponse = await axios.post(EMBEDDING_FUNCTION_URL, { text: query });
+        const queryEmbedding = embeddingResponse.data.embedding;
 
-        if (!embedding) {
-            return res.status(500).json({ error: "Failed to generate embedding" });
-        }
-
-        // Store the embedding in project_embeddings table
-        const { error } = await aiSupabase
-            .from("project_embeddings")
-            .insert([{ content, embedding, metadata }]);
+        // Search for similar embeddings in Supabase
+        const { data, error } = await aiSupabase.rpc("match_project_embeddings", {
+            query_embedding: queryEmbedding,
+            match_threshold: 0.75, // Adjust similarity threshold
+            match_count: 5 // Number of results to return
+        });
 
         if (error) {
-            console.error("Error inserting embedding:", error);
-            return res.status(500).json({ error: "Failed to store embedding" });
+            console.error("Error retrieving embeddings:", error);
+            return res.status(500).json({ error: "Failed to retrieve embeddings" });
         }
 
-        console.log("✅ Embedding stored successfully!");
-        res.status(200).json({ message: "Embedding stored successfully" });
+        res.json({ results: data });
     } catch (error) {
-        console.error("Error storing embedding:", error);
+        console.error("Error:", error);
         res.status(500).json({ error: "Server error" });
     }
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
+
+
 
